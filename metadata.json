@@ -1,0 +1,5 @@
+{
+  "description": "A high-end sales proposal generation tool that synthesizes business spending CSVs and program PDFs using Gemini AI.",
+  "requestFramePermissions": [],
+  "name": "App"
+}
