@@ -211,7 +211,7 @@ const App = () => {
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
+        model: 'gemini-3-pro-image-preview',
         contents: {
           parts: [{ text: `A professional, high-end business photograph for a sales proposal representing: ${prompt}. Cinematic lighting, corporate aesthetic, clean composition, 16:9 aspect ratio.` }]
         },
