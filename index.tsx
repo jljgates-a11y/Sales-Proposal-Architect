@@ -54,35 +54,114 @@ const formatCurrency = (amount: number) => {
   }).format(amount);
 };
 
-// Simplified CSV Parser
+// Robust CSV Parser - handles quoted fields, curly quotes, commas in values
+const parseCSVLine = (line: string): string[] => {
+  // Normalize curly quotes to straight quotes
+  const normalized = line
+    .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"')  // curly double quotes
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'"); // curly single quotes
+
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < normalized.length; i++) {
+    const char = normalized[i];
+    const nextChar = normalized[i + 1];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (nextChar === '"') {
+          // Escaped quote inside quoted field
+          current += '"';
+          i++; // Skip next quote
+        } else {
+          // End of quoted field
+          inQuotes = false;
+        }
+      } else {
+        current += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === ',') {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+  }
+  result.push(current.trim());
+  return result;
+};
+
 const parseCSV = (text: string): BusinessSpend[] => {
-  const lines = text.split('\n').filter(line => line.trim());
+  const lines = text.split(/\r?\n/).filter(line => line.trim());
   if (lines.length < 2) return [];
 
-  const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-  const businessIdx = headers.findIndex(h => h.includes('business') || h.includes('company') || h.includes('name'));
-  const productIdx = headers.findIndex(h => h.includes('product') || h.includes('item'));
-  const spendIdx = headers.findIndex(h => h.includes('spend') || h.includes('amount') || h.includes('total'));
+  const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
 
-  if (businessIdx === -1 || spendIdx === -1) return [];
+  // Find the member/business column (usually first column or named member/business/company)
+  let businessIdx = headers.findIndex(h => h === 'member' || h === 'business' || h === 'company' || h === 'name');
+  if (businessIdx === -1) businessIdx = 0; // Default to first column
+
+  // Check if this is a "wide" format (multiple program columns) or "long" format (product/spend columns)
+  const productIdx = headers.findIndex(h => h.includes('product') || h.includes('item'));
+  const spendIdx = headers.findIndex(h => h === 'spend' || h === 'amount');
+  const totalIdx = headers.findIndex(h => h === 'total');
+
+  const isWideFormat = productIdx === -1 && spendIdx === -1;
 
   const map = new Map<string, BusinessSpend>();
 
   for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',').map(c => c.trim());
-    const name = cols[businessIdx];
-    const productName = productIdx !== -1 ? cols[productIdx] : 'Unknown Product';
-    const spend = parseFloat(cols[spendIdx].replace(/[$,]/g, '')) || 0;
+    const cols = parseCSVLine(lines[i]);
+    const name = cols[businessIdx]?.trim();
 
     if (!name) continue;
 
-    if (!map.has(name)) {
-      map.set(name, { businessName: name, totalSpend: 0, products: {} });
-    }
+    if (isWideFormat) {
+      // Wide format: each column header is a program name, cell values are spend amounts
+      const products: Record<string, number> = {};
+      let totalSpend = 0;
 
-    const entry = map.get(name)!;
-    entry.totalSpend += spend;
-    entry.products[productName] = (entry.products[productName] || 0) + spend;
+      for (let j = 0; j < headers.length; j++) {
+        if (j === businessIdx || j === totalIdx) continue;
+        const header = headers[j];
+        if (!header) continue;
+
+        const cellValue = cols[j] || '';
+        // Skip formula cells (start with =) and parse numbers
+        if (cellValue.startsWith('=')) continue;
+        const spend = parseFloat(cellValue.replace(/[$,]/g, '')) || 0;
+        if (spend > 0) {
+          // Use original case header from line 0
+          const originalHeader = parseCSVLine(lines[0])[j]?.trim() || header;
+          products[originalHeader] = spend;
+          totalSpend += spend;
+        }
+      }
+
+      if (totalSpend > 0 || Object.keys(products).length > 0) {
+        map.set(name, { businessName: name, totalSpend, products });
+      }
+    } else {
+      // Long format: separate product and spend columns
+      const productName = productIdx !== -1 ? cols[productIdx]?.trim() : 'Unknown Product';
+      const spend = parseFloat((cols[spendIdx] || '').replace(/[$,]/g, '')) || 0;
+
+      if (!map.has(name)) {
+        map.set(name, { businessName: name, totalSpend: 0, products: {} });
+      }
+
+      const entry = map.get(name)!;
+      entry.totalSpend += spend;
+      if (productName) {
+        entry.products[productName] = (entry.products[productName] || 0) + spend;
+      }
+    }
   }
 
   return Array.from(map.values()).sort((a, b) => b.totalSpend - a.totalSpend);
